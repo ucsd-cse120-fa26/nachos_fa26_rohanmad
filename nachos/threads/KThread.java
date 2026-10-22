@@ -203,6 +203,11 @@ public class KThread {
 
 		currentThread.status = statusFinished;
 
+		if(currentThread.joinMe != null){
+			currentThread.joinMe.ready();
+			currentThread.joinMe = null;
+		}
+
 		sleep();
 	}
 
@@ -284,6 +289,17 @@ public class KThread {
 		Lib.debug(dbgThread, "Joining to thread: " + toString());
 
 		Lib.assertTrue(this != currentThread);
+		Lib.assertTrue(!joined);
+		joined = true;
+		boolean restore = Machine.interrupt().disable();
+		// if(this.status == statusFinished){
+		// 	return;
+		// }
+		if(this.status != statusFinished){
+			this.joinMe = currentThread;
+			KThread.sleep();
+		}
+		Machine.interrupt().restore(restore);
 
 	}
 
@@ -415,6 +431,13 @@ public class KThread {
 
 		new KThread(new PingTest(1)).setName("forked thread").fork();
 		new PingTest(0).run();
+		joinCheckWaits();
+		joinCheckAlreadyFinished();
+		joinCheckSelf();
+		joinCheckTwice();
+		joinCheckSequential();
+		joinCheckPairs();
+		joinTest1();
 	}
 
 	private static final char dbgThread = 't';
@@ -465,4 +488,169 @@ public class KThread {
 	private static KThread toBeDestroyed = null;
 
 	private static KThread idleThread = null;
+
+	private KThread joinMe = null;
+	private boolean joined = false;
+    
+    private static void joinTest1 () {
+		KThread child1 = new KThread( new Runnable () {
+			public void run() {
+				System.out.println("I (heart) Nachos!");
+			}
+			});
+		child1.setName("child1").fork();
+	
+		// We want the child to finish before we call join.  Although
+		// our solutions to the problems cannot busy wait, our test
+		// programs can!
+	
+		for (int i = 0; i < 5; i++) {
+			System.out.println ("busy...");
+			KThread.currentThread().yield();
+		}
+	
+		child1.join();
+		System.out.println("After joining, child1 should be finished.");
+		System.out.println("is it? " + (child1.status == statusFinished));
+		Lib.assertTrue((child1.status == statusFinished), " Expected child1 to be finished.");
+	}
+
+	private static void yieldN(int n) {
+		for (int i = 0; i < n; i++)
+			KThread.yield();
+	}
+	
+	// 1. B joins A while A is still executing: B waits until A finishes.
+	private static void joinCheckWaits() {
+		final boolean[] aDone = new boolean[1];
+		final boolean[] bReturned = new boolean[1];
+		final boolean[] bSawADone = new boolean[1];
+	
+		final KThread a = new KThread(new Runnable() {
+			public void run() {
+				ThreadedKernel.alarm.waitUntil(2000);   
+				aDone[0] = true;
+			}
+		});
+		KThread b = new KThread(new Runnable() {
+			public void run() {
+				a.join();
+				bSawADone[0] = aDone[0];
+				bReturned[0] = true;
+			}
+		});
+		a.fork();
+		b.fork();
+	
+		yieldN(20);
+		Lib.assertTrue(!aDone[0]);       
+		Lib.assertTrue(!bReturned[0]);   
+	
+		b.join();
+		Lib.assertTrue(bReturned[0] && bSawADone[0]);   
+		System.out.println("joinCheckWaits: passed");
+	}
+	
+	// 2. B joins A after A has finished: B does not wait.
+	private static void joinCheckAlreadyFinished() {
+		final boolean[] done = new boolean[1];
+		KThread a = new KThread(new Runnable() {
+			public void run() { done[0] = true; }
+		});
+		a.fork();
+		yieldN(20);                     
+		Lib.assertTrue(done[0]);
+	
+		long t0 = Machine.timer().getTime();
+		a.join();                        
+		Lib.assertTrue(Machine.timer().getTime() - t0 < 500);
+		System.out.println("joinCheckAlreadyFinished: passed");
+	}
+	
+	// 3. A thread joining itself asserts.
+	private static void joinCheckSelf() {
+		boolean threw = false;
+		try { KThread.currentThread().join(); } catch (Error e) { threw = true; }
+		Lib.assertTrue(threw);
+		System.out.println("joinCheckSelf: passed");
+	}
+	
+	// 4. join called more than once on a thread asserts (same or different caller).
+	private static void joinCheckTwice() {
+		final KThread a = new KThread(new Runnable() {
+			public void run() { yieldN(3); }
+		});
+		a.fork();
+		a.join();
+	
+		boolean threw = false;
+		try { a.join(); } catch (Error e) { threw = true; }
+		Lib.assertTrue(threw);           
+	
+		final boolean[] threwOther = new boolean[1];
+		KThread c = new KThread(new Runnable() {
+			public void run() {
+				try { a.join(); } catch (Error e) { threwOther[0] = true; }
+			}
+		});
+		c.fork();
+		c.join();
+		Lib.assertTrue(threwOther[0]);   
+		System.out.println("joinCheckTwice: passed");
+	}
+	
+	// 5. One thread joins several others in succession.
+	private static void joinCheckSequential() {
+		final int n = 5;
+		final boolean[] done = new boolean[n];
+		KThread[] kids = new KThread[n];
+		for (int i = 0; i < n; i++) {
+			final int id = i;
+			kids[i] = new KThread(new Runnable() {
+				public void run() {
+					yieldN(id * 3 + 1);          
+					done[id] = true;
+				}
+			});
+			kids[i].fork();
+		}
+		for (int i = 0; i < n; i++) {
+			kids[i].join();
+			Lib.assertTrue(done[i]);           
+		}
+		System.out.println("joinCheckSequential: passed");
+	}
+	
+	// 6. Independent pairs join without interfering with each other.
+	private static void joinCheckPairs() {
+		final int pairs = 4;
+		final boolean[] aDone = new boolean[pairs];
+		final boolean[] bSawOwnA = new boolean[pairs];
+		final boolean[] bDone = new boolean[pairs];
+		KThread[] bs = new KThread[pairs];
+	
+		for (int i = 0; i < pairs; i++) {
+			final int id = i;
+			final KThread a = new KThread(new Runnable() {
+				public void run() {
+					yieldN((pairs - id) * 4);   
+					aDone[id] = true;
+				}
+			});
+			bs[i] = new KThread(new Runnable() {
+				public void run() {
+					a.join();
+					bSawOwnA[id] = aDone[id];   
+					bDone[id] = true;
+				}
+			});
+			a.fork();
+			bs[i].fork();
+		}
+		for (KThread b : bs)
+			b.join();
+		for (int i = 0; i < pairs; i++)
+			Lib.assertTrue(bDone[i] && bSawOwnA[i]);
+		System.out.println("joinCheckPairs: passed");
+	}
 }

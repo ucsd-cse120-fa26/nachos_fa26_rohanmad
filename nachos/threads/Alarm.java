@@ -1,4 +1,5 @@
 package nachos.threads;
+import java.util.Iterator;
 import java.util.PriorityQueue;
 import java.util.Queue;
 import nachos.machine.*;
@@ -79,6 +80,12 @@ public class Alarm {
 	 * 
 	 * @see nachos.machine.Timer#getTime()
 	 */
+
+	public void setTimer(long wakeTime) {
+		Lib.assertTrue(Machine.interrupt().disabled());
+		q.add(new timeQueue(KThread.currentThread(), wakeTime));
+	}
+
 	public void waitUntil(long x) {
 		// for now, cheat just to get something working (busy waiting is bad)
 		if(x <= 0){
@@ -86,7 +93,7 @@ public class Alarm {
 		}
 		long wakeTime = Machine.timer().getTime() + x;
 		boolean restore = Machine.interrupt().disable();
-		q.add(new timeQueue(KThread.currentThread(), wakeTime));
+		setTimer(wakeTime);
 		KThread.sleep();
 		Machine.interrupt().restore(restore);
 	}
@@ -101,7 +108,22 @@ public class Alarm {
 	 * @param thread the thread whose timer should be cancelled.
 	 */
         public boolean cancel(KThread thread) {
-		return false;
+			
+			boolean restore = Machine.interrupt().disable();
+			Iterator<timeQueue> iterator = q.iterator();
+
+			while (iterator.hasNext()) {
+				timeQueue tq = iterator.next();
+				if (tq.thread == thread) { 
+					iterator.remove(); 
+					thread.ready();
+					Machine.interrupt().restore(restore);
+					return true; 
+				}
+			}
+
+			Machine.interrupt().restore(restore);
+			return false;
 	}
 
 	public static void alarmTest1() {
@@ -116,46 +138,95 @@ public class Alarm {
 		}
 	}
 
-	public static void alarmZeroTest(){
-		int durations[] = {0, 10*(-1), 100*(-20)};
-		long t0, t1;
-	
+	// the timer only fires about every 500 ticks, so a thread can wake up to roughly one interval late.
+	private static final long SLACK = 1000;
+
+	// 1. A thread waits (approximately) its requested duration.
+	public static void alarmTestDuration() {
+		int durations[] = {1000, 10*1000, 100*1000};
+
 		for (int d : durations) {
-			t0 = Machine.timer().getTime();
-			ThreadedKernel.alarm.waitUntil (d);
-			t1 = Machine.timer().getTime();
-			System.out.println ("alarmTest1: waited for " + (t1 - t0) + " ticks");
+			long t0 = Machine.timer().getTime();
+			ThreadedKernel.alarm.waitUntil(d);
+			long elapsed = Machine.timer().getTime() - t0;
+
+			Lib.assertTrue(elapsed >= d);           
+			Lib.assertTrue(elapsed < d + SLACK);     
+			System.out.println("alarmTestDuration: waited " + elapsed
+					+ " ticks for " + d + ": passed");
 		}
 	}
 
-	public static void alarmMultiple(){
-		int durations[] = {1000, 1000, 1001};
-		KThread[] threads = new KThread[durations.length];
-		final Semaphore done = new Semaphore(0);
-	
-		for(int i = 0; i < durations.length; i++){
-			final int d = durations[i];
-			final int id = i;			
+	// 2. A zero or negative wait returns without waiting.
+	public static void alarmTestZeroOrNegative() {
+		int durations[] = {0, -10, -2000};
+
+		for (int d : durations) {
+			long t0 = Machine.timer().getTime();
+			ThreadedKernel.alarm.waitUntil(d);
+			long elapsed = Machine.timer().getTime() - t0;
+
+			Lib.assertTrue(elapsed < 500);
+			System.out.println("alarmTestZeroOrNegative: wait(" + d
+					+ ") returned after " + elapsed + " ticks: passed");
+		}
+	}
+
+	// 3. Multiple threads wake at the proper times, in the proper order.
+	public static void alarmTestMultiple() {
+		final long durations[] = {3000, 1000, 2000, 5000, 4000};
+		final int n = durations.length;
+		final long[] start = new long[n];
+		final long[] end = new long[n];
+		KThread[] threads = new KThread[n];
+
+		for (int i = 0; i < n; i++) {
+			final int id = i;
 			threads[i] = new KThread(new Runnable() {
 				public void run() {
-					long start = Machine.timer().getTime();
-					ThreadedKernel.alarm.waitUntil(d);
-					long end = Machine.timer().getTime();
-					System.out.println("thread " + id + ": ..." + start + " and finished at: " + end);
-					done.V();                    
+					start[id] = Machine.timer().getTime();
+					ThreadedKernel.alarm.waitUntil(durations[id]);
+					end[id] = Machine.timer().getTime();
 				}
 			});
-			threads[i].fork();                   
+			threads[i].fork();
+		}
+		for (KThread t : threads)
+			t.join(); 
 
+		for (int i = 0; i < n; i++) {
+			long elapsed = end[i] - start[i];
+			Lib.assertTrue(elapsed >= durations[i]);
+			Lib.assertTrue(elapsed < durations[i] + SLACK);
 		}
 
-		for (int i = 0; i < durations.length; i++) done.P();
+		for (int i = 0; i < n; i++) {
+			for (int j = 0; j < n; j++) {
+				if (durations[i] < durations[j])
+					Lib.assertTrue(end[i] <= end[j]);
+			}
+		}
+		System.out.println("alarmTestMultiple: passed");
+	}
+
+	// cancel on a thread that never set a timer returns false.
+	public static void alarmTestCancelNoTimer() {
+		KThread t = new KThread(new Runnable() {
+			public void run() { }
+		});
+		t.fork();
+		t.join();
+		Lib.assertTrue(!ThreadedKernel.alarm.cancel(t));
+		Lib.assertTrue(!ThreadedKernel.alarm.cancel(KThread.currentThread()));
+		System.out.println("alarmTestCancelNoTimer: passed");
 	}
 
 	public static void selfTest() {
 		alarmTest1();
-		alarmZeroTest();
-		alarmMultiple();
+		alarmTestDuration();
+		alarmTestZeroOrNegative();
+		alarmTestMultiple();
+		alarmTestCancelNoTimer();
 		// Invoke your other test methods here ...
 	}
 }
