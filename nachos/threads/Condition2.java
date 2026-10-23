@@ -1,5 +1,6 @@
 package nachos.threads;
 
+import java.util.HashSet;
 import java.util.LinkedList;
 
 import nachos.machine.*;
@@ -25,6 +26,8 @@ public class Condition2 {
 		this.conditionLock = conditionLock;
 
 		waitQueue = new LinkedList<KThread>();
+		timed = new HashSet<KThread>();
+		
 	}
 
 	/**
@@ -50,13 +53,17 @@ public class Condition2 {
 	 */
 	public void wake() {
 		Lib.assertTrue(conditionLock.isHeldByCurrentThread());
-
+	
 		boolean restore = Machine.interrupt().disable();
-		if(!waitQueue.isEmpty()){
+		while (!waitQueue.isEmpty()) {
 			KThread t = waitQueue.removeFirst();
-			if (!ThreadedKernel.alarm.cancel(t)) {
-				t.ready();
+			if (ThreadedKernel.alarm.cancel(t)){
+				break;     
 			}
+			if (!timed.contains(t)) { 
+				t.ready(); 
+				break; 
+			}  
 		}
 		Machine.interrupt().restore(restore);
 	}
@@ -80,29 +87,29 @@ public class Condition2 {
 	 * the lock before <tt>sleep()</tt> returns.  A negative or 0
 	 * timeout returns immediately.
 	 */
-    public void sleepFor(long timeout) {
+	public void sleepFor(long timeout) {
 		Lib.assertTrue(conditionLock.isHeldByCurrentThread());
-			
 		if(timeout <= 0) return;
+		
 		boolean restore = Machine.interrupt().disable();
-		waitQueue.add(KThread.currentThread());
+		KThread me = KThread.currentThread();
+		waitQueue.add(me);
+		timed.add(me);
 		conditionLock.release();
-
+		
 		long wakeTime = Machine.timer().getTime() + timeout;
 		ThreadedKernel.alarm.setTimer(wakeTime);
 		KThread.sleep();
-
-		if(waitQueue.contains(KThread.currentThread())){
-			waitQueue.remove(KThread.currentThread());
-		}
 		
+		timed.remove(me);
+		waitQueue.remove(me);  
 		Machine.interrupt().restore(restore);
 		conditionLock.acquire();
 	}
 
     private Lock conditionLock;
 	private LinkedList<KThread> waitQueue;
-
+	private HashSet<KThread> timed;
 
 
 	
