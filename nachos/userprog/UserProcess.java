@@ -491,7 +491,7 @@ public class UserProcess {
 		return -1;
 	}
 
-	int creat(char *name){
+	int creat(int name){
 		String fileName = readVirtualMemoryString(name, 256);
 		if (fileName == null) {return -1;}
 
@@ -505,7 +505,7 @@ public class UserProcess {
 		return ind;
 	}
 
-	int open(char *name){
+	int open(int name){
 		String fileName = readVirtualMemoryString(name, 256);
 		if (fileName == null) {return -1;}
 
@@ -519,12 +519,93 @@ public class UserProcess {
 		return ind;
 	}
 
+	int close(int fd){
+		if(fd < 0 || fd >= fileTable.length) { return -1;}
+
+		
+		if(fileTable[fd] == null){ return -1; }
+
+		fileTable[fd].close();
+		fileTable[fd] = null;
+		return 0;
+	}
+
+	int unlink(int name){
+		String fileName = readVirtualMemoryString(name, 256);
+		if(fileName == null){ return -1; }
+
+		boolean status = ThreadedKernel.fileSystem.remove(fileName);
+		if(!status) { return -1; }
+
+		return 0;
+	}
+
+	boolean validFd(int fd) {
+		return fd >= 0 && fd < fileTable.length && fileTable[fd] != null;
+	}
+
+	int handleWrite(int fd, int bufAddr, int size) {
+		if (!validFd(fd) || size < 0) return -1;
+		if (size == 0) return 0;
+	
+		byte[] buf = new byte[pageSize];  
+		int total = 0;
+	
+		while (total < size) {
+			int len = Math.min(buf.length, size - total);
+	
+			int got = readVirtualMemory(bufAddr + total, buf, 0, len);
+			if (got != len) return -1;    
+	
+			int wrote = fileTable[fd].write(buf, 0, len);
+			if (wrote != len) return -1;    
+	
+			total += wrote;
+		}
+		return total;
+	}
+
+	int handleRead(int fd, int bufAddr, int size) {
+		if (!validFd(fd) || size < 0) return -1;
+		if (size == 0) return 0;
+	
+		byte[] buf = new byte[pageSize];
+		int total = 0;
+	
+		while (total < size) {
+			int len = Math.min(buf.length, size - total);
+	
+			int n = fileTable[fd].read(buf, 0, len);
+			if (n < 0) return -1;           
+			if (n == 0) break;              
+	
+			int copied = writeVirtualMemory(bufAddr + total, buf, 0, n);
+			if (copied != n) return -1;    
+	
+			total += n;
+			if (n < len) break;           
+		}
+		return total;
+	}
+
 	public int handleSyscall(int syscall, int a0, int a1, int a2, int a3) {
 		switch (syscall) {
 		case syscallHalt:
 			return handleHalt();
 		case syscallExit:
 			return handleExit(a0);
+		case syscallCreate:
+			return creat(a0);
+		case syscallOpen:
+			return open(a0);
+		case syscallRead:
+			return handleRead(a0, a1, a2);
+		case syscallWrite:
+			return handleWrite(a0, a1, a2);
+		case syscallClose:
+			return close(a0);
+		case syscallUnlink:
+			return unlink(a0);
 
 		default:
 			Lib.debug(dbgProcess, "Unknown syscall " + syscall);
@@ -532,6 +613,7 @@ public class UserProcess {
 		}
 		return 0;
 	}
+
 
 	/**
 	 * Handle a user exception. Called by <tt>UserKernel.exceptionHandler()</tt>
