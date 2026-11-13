@@ -23,11 +23,17 @@ public class UserProcess {
 	/**
 	 * Allocate a new process.
 	 */
+	private OpenFile[] fileTable;
+
 	public UserProcess() {
 		int numPhysPages = Machine.processor().getNumPhysPages();
 		pageTable = new TranslationEntry[numPhysPages];
 		for (int i = 0; i < numPhysPages; i++)
 			pageTable[i] = new TranslationEntry(i, i, true, false, false, false);
+
+		fileTable = new OpenFile[16];
+		fileTable[0] = UserKernel.console.openForReading();
+		fileTable[1] = UserKernel.console.openForWriting();
 	}
 
 	/**
@@ -472,6 +478,47 @@ public class UserProcess {
 	 * @param a3 the fourth syscall argument.
 	 * @return the value to be returned to the user.
 	 */
+
+	int openSpace(){
+		if (fileTable == null) {
+			return -1;
+		}
+		for(int i = 0; i < 16; i++){
+			if(fileTable[i] == null){
+				return i;
+			}
+		}
+		return -1;
+	}
+
+	int creat(char *name){
+		String fileName = readVirtualMemoryString(name, 256);
+		if (fileName == null) {return -1;}
+
+		int ind = openSpace();
+		if (ind == -1) return -1; 
+
+		OpenFile file = ThreadedKernel.fileSystem.open(fileName, true);
+		if (file == null) return -1;
+
+		fileTable[ind] = file;
+		return ind;
+	}
+
+	int open(char *name){
+		String fileName = readVirtualMemoryString(name, 256);
+		if (fileName == null) {return -1;}
+
+		int ind = openSpace();
+		if (ind == -1) return -1; 
+
+		OpenFile file = ThreadedKernel.fileSystem.open(fileName, false);
+		if (file == null) return -1;
+
+		fileTable[ind] = file;
+		return ind;
+	}
+
 	public int handleSyscall(int syscall, int a0, int a1, int a2, int a3) {
 		switch (syscall) {
 		case syscallHalt:
