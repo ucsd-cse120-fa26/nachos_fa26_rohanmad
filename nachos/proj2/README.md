@@ -22,12 +22,11 @@ and tested them with the provided programs, my own C programs, and the shell.
   `releasePages` returns pages, so gaps in memory get used.
 - **loadSections / unloadSections**: `loadSections` allocates exactly `numPages`, builds
   the `pageTable`, zeroes the pages, loads each COFF section into its real pages, and
-  marks read-only sections `readOnly`. `unloadSections` frees the pages and nulls the
-  table so a second call does nothing. `unloadSections` also closes the COFF file, which
-  fixed a leak where later execs failed with "open failed" even though pages were free.
+  marks read-only sections `readOnly`. `unloadSections` closes the COFF files, 
+  frees the pages and nulls the table so a second call does nothing. 
 - **readVirtualMemory / writeVirtualMemory**: both use one `transfer` helper that copies
   one page-sized piece at a time, so buffers can span pages. It checks bounds, `valid`,
-  and `readOnly` (writes), and on any problem returns the bytes copied so far. It never
+  and `readOnly` (writes), and on any problem returns the bytes copied so far, and never
   throws.
 - **exec / join**: `exec` reads the filename and `argv` from user memory and returns -1
   on any bad pointer, negative `argc`, missing file, or not enough memory. Each process
@@ -35,7 +34,7 @@ and tested them with the provided programs, my own C programs, and the shell.
   direct children, so grandchildren, repeat joins, and bad pids return -1. It returns 1
   with the status for a normal exit and 0 for an exception. A bad status pointer returns
   -1 before waiting.
-- **exit / halt**: `exit` and the unhandled-exception path share one `cleanup` that
+- **exit / halt**: `exit` and the default branch share one `cleanup` that
   records the status, closes files, frees memory, and decrements a `numRunning` count.
   The last process to exit calls `Kernel.kernel.terminate()`. `halt` returns -1 unless
   the caller is the root (pid 0).
