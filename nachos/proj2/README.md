@@ -42,8 +42,6 @@ and tested them with the provided programs, my own C programs, and the shell.
   
 
 ## How I tested them
-I wrote C programs in `test/` and also used the provided programs and the shell:
-
 - **File calls**: create, write, close, reopen, read back and compare, then unlink. Also
   bad fds, double close, null and out-of-range buffers, and opening more than 16 files.
 - **Memory**: `echo` and `cat` for strings and buffers across pages, and repeated shell
