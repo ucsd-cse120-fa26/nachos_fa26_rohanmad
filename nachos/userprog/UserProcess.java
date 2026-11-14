@@ -403,6 +403,11 @@ public class UserProcess {
 	 * Release any resources allocated by <tt>loadSections()</tt>.
 	 */
 	protected void unloadSections() {
+		if (coff != null) {
+			coff.close();
+			coff = null;
+		}
+	
 		if (pageTable == null) return;
 	
 		int[] pages = new int[pageTable.length];
@@ -467,7 +472,7 @@ public class UserProcess {
 			numRunning--;
 			if (numRunning == 0) { last = true; }
 		}
-	
+		
 		if (last) { Kernel.kernel.terminate(); }
 		KThread.finish();
 	}
@@ -486,7 +491,7 @@ public class UserProcess {
 		// status for debugging, and unconditionally terminate
 		// with just one process
 		System.out.println ("UserProcess.handleExit (" + status + ")");
-		Kernel.kernel.terminate();
+		// Kernel.kernel.terminate();
 
 		cleanup(status, true);
 		return 0;
@@ -690,7 +695,7 @@ public class UserProcess {
 		}
 	
 		UserProcess child = UserProcess.newUserProcess();
-		if (!child.execute(fileName, args)) { return -1; }
+		if (!child.execute(fileName, args)) { System.out.println("exec: execute failed for " + fileName); return -1; }
 	
 		children.put(child.pid, child);
 		return child.pid;
