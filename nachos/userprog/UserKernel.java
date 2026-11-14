@@ -15,7 +15,7 @@ public class UserKernel extends ThreadedKernel {
 	 */
 	
 	private static LinkedList<Integer> freePages = new LinkedList<Integer>();
-	private static Lock freePagesLock = new Lock();
+	private static Lock freePagesLock;
 
 	public UserKernel() {
 		super();
@@ -27,6 +27,8 @@ public class UserKernel extends ThreadedKernel {
 	 */
 	public void initialize(String[] args) {
 		super.initialize(args);
+
+		freePagesLock = new Lock();
 
 		console = new SynchConsole(Machine.console());
 

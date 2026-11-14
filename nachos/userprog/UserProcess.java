@@ -1,5 +1,6 @@
 package nachos.userprog;
 
+import java.util.HashMap;
 import nachos.machine.*;
 import nachos.threads.*;
 import nachos.userprog.*;
@@ -24,12 +25,25 @@ public class UserProcess {
 	 * Allocate a new process.
 	 */
 	private OpenFile[] fileTable;
+	private static int nextPid = 0;
+	private static int numRunning = 0;
+	private static Object procLock = new Object();
+	
+	private int pid;
+	private int exitStatus;
+	private boolean exitedNormally = false;
+	private HashMap<Integer, UserProcess> children = new HashMap<Integer, UserProcess>();
 
 	public UserProcess() {
 		// int numPhysPages = Machine.processor().getNumPhysPages();
 		// pageTable = new TranslationEntry[numPhysPages];
 		// for (int i = 0; i < numPhysPages; i++)
 		// 	pageTable[i] = new TranslationEntry(i, i, true, false, false, false);
+
+		synchronized (procLock) {
+			pid = nextPid;
+			nextPid++;
+		}
 
 		fileTable = new OpenFile[16];
 		fileTable[0] = UserKernel.console.openForReading();
@@ -69,12 +83,17 @@ public class UserProcess {
 	 * @return <tt>true</tt> if the program was successfully executed.
 	 */
 	public boolean execute(String name, String[] args) {
-		if (!load(name, args))
+		if (!load(name, args)) {
+			unloadSections();
 			return false;
-
+		}
+	
+		synchronized (procLock) {
+			numRunning++;
+		}
+	
 		thread = new UThread(this);
 		thread.setName(name).fork();
-
 		return true;
 	}
 
@@ -421,13 +440,38 @@ public class UserProcess {
 	 * Handle the halt() system call.
 	 */
 	private int handleHalt() {
-		Lib.debug(dbgProcess, "UserProcess.handleHalt");
-
+		if (pid != 0) { return -1; }
+	
 		Machine.halt();
-
+	
 		Lib.assertNotReached("Machine.halt() did not halt machine!");
 		return 0;
 	}
+
+	void cleanup(int status, boolean normal) {
+		exitStatus = status;
+		exitedNormally = normal;
+	
+		for (int i = 0; i < fileTable.length; i++) {
+			if (fileTable[i] != null) {
+				fileTable[i].close();
+				fileTable[i] = null;
+			}
+		}
+	
+		unloadSections();
+		children.clear();
+	
+		boolean last = false;
+		synchronized (procLock) {
+			numRunning--;
+			if (numRunning == 0) { last = true; }
+		}
+	
+		if (last) { Kernel.kernel.terminate(); }
+		KThread.finish();
+	}
+	
 
 	/**
 	 * Handle the exit() system call.
@@ -444,6 +488,7 @@ public class UserProcess {
 		System.out.println ("UserProcess.handleExit (" + status + ")");
 		Kernel.kernel.terminate();
 
+		cleanup(status, true);
 		return 0;
 	}
 
@@ -628,6 +673,50 @@ public class UserProcess {
 		return total;
 	}
 
+	int exec(int fileAddr, int argc, int argvAddr) {
+		String fileName = readVirtualMemoryString(fileAddr, 256);
+		if (fileName == null) { return -1; }
+		if (argc < 0 || argc > 256) { return -1; }
+	
+		String[] args = new String[argc];
+		for (int i = 0; i < argc; i++) {
+			byte[] ptr = new byte[4];
+			int got = readVirtualMemory(argvAddr + 4 * i, ptr);
+			if (got != 4) { return -1; }
+	
+			String arg = readVirtualMemoryString(Lib.bytesToInt(ptr, 0), 256);
+			if (arg == null) { return -1; }
+			args[i] = arg;
+		}
+	
+		UserProcess child = UserProcess.newUserProcess();
+		if (!child.execute(fileName, args)) { return -1; }
+	
+		children.put(child.pid, child);
+		return child.pid;
+	}
+
+	int join(int childPid, int statusAddr) {
+		UserProcess child = children.get(childPid);
+		if (child == null) { return -1; }
+	
+		if (statusAddr != 0) {
+			byte[] check = new byte[4];
+			if (readVirtualMemory(statusAddr, check) != 4) { return -1; }
+		}
+	
+		child.thread.join();
+		children.remove(childPid);
+	
+		if (!child.exitedNormally) { return 0; }
+	
+		if (statusAddr != 0) {
+			byte[] out = Lib.bytesFromInt(child.exitStatus);
+			if (writeVirtualMemory(statusAddr, out) != 4) { return -1; }
+		}
+		return 1;
+	}
+
 	public int handleSyscall(int syscall, int a0, int a1, int a2, int a3) {
 		switch (syscall) {
 		case syscallHalt:
@@ -646,6 +735,10 @@ public class UserProcess {
 			return close(a0);
 		case syscallUnlink:
 			return unlink(a0);
+		case syscallExec:
+			return exec(a0, a1, a2);
+		case syscallJoin:
+			return join(a0, a1);
 
 		default:
 			Lib.debug(dbgProcess, "Unknown syscall " + syscall);
@@ -677,9 +770,8 @@ public class UserProcess {
 			break;
 
 		default:
-			Lib.debug(dbgProcess, "Unexpected exception: "
-					+ Processor.exceptionNames[cause]);
-			Lib.assertNotReached("Unexpected exception");
+			Lib.debug(dbgProcess, "Unexpected exception: " + Processor.exceptionNames[cause]);
+			cleanup(0, false);
 		}
 	}
 
@@ -696,7 +788,7 @@ public class UserProcess {
 	protected final int stackPages = 8;
 
 	/** The thread that executes the user-level program. */
-        protected UThread thread;
+    protected UThread thread;
     
 	private int initialPC, initialSP;
 
