@@ -1,5 +1,7 @@
 package nachos.userprog;
 
+import java.util.LinkedList;
+
 import nachos.machine.*;
 import nachos.threads.*;
 import nachos.userprog.*;
@@ -11,6 +13,10 @@ public class UserKernel extends ThreadedKernel {
 	/**
 	 * Allocate a new user kernel.
 	 */
+	
+	private static LinkedList<Integer> freePages = new LinkedList<Integer>();
+	private static Lock freePagesLock = new Lock();
+
 	public UserKernel() {
 		super();
 	}
@@ -24,11 +30,46 @@ public class UserKernel extends ThreadedKernel {
 
 		console = new SynchConsole(Machine.console());
 
+		for(int i = 0; i < Machine.processor().getNumPhysPages(); i++){
+			freePages.add(i);
+		}
+
 		Machine.processor().setExceptionHandler(new Runnable() {
 			public void run() {
 				exceptionHandler();
 			}
 		});
+	}
+
+	public static int[] allocatePages(int n) {
+		if (n < 0) return null;
+	
+		freePagesLock.acquire();
+		try {
+			if (freePages.size() < n) return null;   
+	
+			int[] pages = new int[n];
+			for (int i = 0; i < n; i++) {
+				pages[i] = freePages.removeFirst();
+			}
+			return pages;
+		} finally {
+			freePagesLock.release();
+		}
+	}
+
+	
+	public static void releasePages(int[] pages) {
+		if (pages == null) return;
+
+		freePagesLock.acquire();
+		try {
+			for (int p : pages) {
+				freePages.add(p);
+			}
+		} finally {
+			freePagesLock.release();
+		}
 	}
 
 	/**
